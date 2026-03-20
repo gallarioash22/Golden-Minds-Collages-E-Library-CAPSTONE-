@@ -23,47 +23,70 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['signup'])) {
     $contact   = mysqli_real_escape_string($conn, trim($_POST['contact']));
     $address   = mysqli_real_escape_string($conn, trim($_POST['address']));
     $username  = mysqli_real_escape_string($conn, trim($_POST['username']));
-    $lrn  = mysqli_real_escape_string($conn, trim($_POST['lrn']));
+    $school_qr = mysqli_real_escape_string($conn, trim($_POST['school_qr'] ?? ''));
     $password  = trim($_POST['password']);
 
-    // simple validations
     if (
-  $full_name === '' || $gender === '' || $birthday === '' ||
-  $section === '' || $strand === '' || $contact === '' ||
-  $address === '' || $username === '' || $lrn === '' || $password === ''
-  ) {
-  $message = "Please fill out all fields.";
-  }
-  elseif (strlen($password) < 6) {
-  $message = "Password must be at least 6 characters.";
-  }
-  elseif (!preg_match('/^[0-9]{12}$/', $lrn)) {
-  $message = "LRN must be exactly 12 digits.";
-  }
-  elseif (!preg_match('/^[0-9]{10,11}$/', $contact)) {
-    $message = "Contact number must be 10-11 digits.";
-  } 
-
+        $full_name === '' || $gender === '' || $birthday === '' ||
+        $section === '' || $strand === '' || $contact === '' ||
+        $address === '' || $username === '' || $school_qr === '' || $password === ''
+    ) {
+        $message = "Please fill out all fields.";
+    }
+    elseif (strlen($password) < 6) {
+        $message = "Password must be at least 6 characters.";
+    }
+    elseif (!preg_match('/^[0-9]{10,11}$/', $contact)) {
+        $message = "Contact number must be 10-11 digits.";
+    }
     else {
         // check username uniqueness
         $chk = mysqli_query($conn, "SELECT id FROM tbl_users WHERE username='$username' LIMIT 1");
         if (mysqli_num_rows($chk) > 0) {
             $message = "Username already taken. Choose another.";
         } else {
-            // hash password before saving
-           $hash = password_hash($password, PASSWORD_DEFAULT);
-
-          $user_session_id = bin2hex(random_bytes(32));
-
-          $sql = "INSERT INTO tbl_users
-          (full_name, gender, birthday, section, strand, contact, address, username, lrn, password, role, profile_pic, user_session_id)
-          VALUES
-          ('$full_name', '$gender', '$birthday', '$section', '$strand', '$contact', '$address', '$username', '$lrn', '$hash', 'user', 'uploads/profile/default.png', '$user_session_id')";
-            if (mysqli_query($conn, $sql)) {
-                echo "<script>alert('Account created successfully!'); window.location='login.php';</script>";
-                exit;
+            // optional: prevent duplicate school QR
+            $chk_qr = mysqli_query($conn, "SELECT id FROM tbl_users WHERE school_qr='$school_qr' LIMIT 1");
+            if ($chk_qr && mysqli_num_rows($chk_qr) > 0) {
+                $message = "This school QR / ID value is already registered.";
             } else {
-                $message = "Failed to create account: " . mysqli_error($conn);
+                // AUTO-GENERATE LRN: GMC-001, GMC-002, GMC-003...
+                $next_number = 1;
+
+                $lrn_query = mysqli_query($conn, "
+                    SELECT lrn
+                    FROM tbl_users
+                    WHERE lrn LIKE 'GMC-%'
+                    ORDER BY CAST(SUBSTRING(lrn, 5) AS UNSIGNED) DESC
+                    LIMIT 1
+                ");
+
+                if ($lrn_query && mysqli_num_rows($lrn_query) > 0) {
+                    $last_row = mysqli_fetch_assoc($lrn_query);
+                    $last_lrn = $last_row['lrn'];
+
+                    if (preg_match('/^GMC-(\d+)$/', $last_lrn, $matches)) {
+                        $next_number = (int)$matches[1] + 1;
+                    }
+                }
+
+                $lrn = "GMC-" . str_pad($next_number, 3, "0", STR_PAD_LEFT);
+
+                // hash password before saving
+                $hash = password_hash($password, PASSWORD_DEFAULT);
+                $user_session_id = bin2hex(random_bytes(32));
+
+                $sql = "INSERT INTO tbl_users
+                (full_name, gender, birthday, section, strand, contact, address, username, lrn, school_qr, password, role, profile_pic, user_session_id)
+                VALUES
+                ('$full_name', '$gender', '$birthday', '$section', '$strand', '$contact', '$address', '$username', '$lrn', '$school_qr', '$hash', 'user', 'uploads/profile/default.png', '$user_session_id')";
+
+                if (mysqli_query($conn, $sql)) {
+                    echo "<script>alert('Account created successfully! Your generated LRN is: $lrn'); window.location='login.php';</script>";
+                    exit;
+                } else {
+                    $message = "Failed to create account: " . mysqli_error($conn);
+                }
             }
         }
     }
@@ -74,10 +97,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['signup'])) {
 <head>
   <meta charset="utf-8">
   <title>Sign Up — Golden Minds E-Library</title>
-
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-
-    <link rel="stylesheet" href="assets/css/style.css">
+  <link rel="stylesheet" href="assets/css/style.css">
 
   <style>
 body{
@@ -91,7 +112,7 @@ body{
 
 .box{
   width: 92%;
-  max-width: 460px; /* instead of fixed 420px */
+  max-width: 460px;
   background:#fff;
   padding:22px;
   border-radius:10px;
@@ -99,50 +120,66 @@ body{
               0 0 30px rgba(144, 84, 15, 0.4);
 }
 
-    h2{color:#b5651d;
-      text-align:center;
-      margin:0 0 12px}
-
-    input, select, textarea{width:100%;
-      padding:10px;
-      margin:8px 0;
-      border:1px solid #955405ff;
-      border-radius:6px;
-      box-sizing:border-box}
-
-    .gender{display:flex;
-      gap:10px;
-      align-items:center}
-
-    button{width:100%;
-      padding:12px;
-      background:#b5651d;
-      color:#fff;
-      border:none;
-      border-radius:6px;
-      cursor:pointer;
-      font-weight:600}
-
-    .small{font-size:13px;color:#666;text-align:center;margin-top:8px;
+h2{
+  color:#b5651d;
+  text-align:center;
+  margin:0 0 12px;
 }
-    .msg{color:#c0392b;margin-bottom:8px;text-align:center}
 
-    .log{
+input, select, textarea{
+  width:100%;
+  padding:10px;
+  margin:8px 0;
+  border:1px solid #955405ff;
+  border-radius:6px;
+  box-sizing:border-box
+}
 
-     text-decoration: none;
-     color: #bb7310ff;
-    }
+.gender{
+  display:flex;
+  gap:10px;
+  align-items:center
+}
 
-    .log:hover {
+button{
+  width:100%;
+  padding:12px;
+  background:#b5651d;
+  color:#fff;
+  border:none;
+  border-radius:6px;
+  cursor:pointer;
+  font-weight:600
+}
+
+.small{
+  font-size:13px;
+  color:#666;
+  text-align:center;
+  margin-top:8px;
+}
+
+.msg{
+  color:#c0392b;
+  margin-bottom:8px;
+  text-align:center
+}
+
+.log{
+  text-decoration: none;
+  color: #bb7310ff;
+}
+
+.log:hover {
   color: #905606ff;
 }
 
-   .sup {
-    width: 100%;
-    padding: 10px;
-    background: #bb7310ff;
-    color: white;
-    border: none;
+.sup {
+  width: 100%;
+  padding: 10px;
+  background: #bb7310ff;
+  color: white;
+  border: none;
 }
 
 .sup:hover {
@@ -154,6 +191,15 @@ body{
   margin-top: 12px;
 }
 
+.lrn-note {
+  background: #fff7e6;
+  border: 1px solid #e0c48c;
+  color: #8a5a14;
+  padding: 10px 12px;
+  border-radius: 6px;
+  margin: 8px 0;
+  font-size: 13px;
+}
   </style>
 </head>
 <body>
@@ -173,36 +219,39 @@ body{
       <input type="text" name="section" placeholder="Section (e.g. 12-A)" value="<?= old('section') ?>" required>
 
       <select name="strand" required>
-      <option value="">-- Select Strand --</option>
-      <option value="ABM" <?= (old('strand')==='ABM')?'selected':'' ?>>ABM</option>
-      <option value="TVL-ICT" <?= (old('strand')==='TVL-ICT')?'selected':'' ?>>TVL-ICT</option>
-      <option value="TVL-HE" <?= (old('strand')==='TVL-HE')?'selected':'' ?>>TVL-HE</option>
-      <option value="STEM" <?= (old('strand')==='STEM')?'selected':'' ?>>STEM</option>
-      <option value="GAS" <?= (old('strand')==='GAS')?'selected':'' ?>>GAS</option>
-      <option value="HUMSS" <?= (old('strand')==='HUMSS')?'selected':'' ?>>HUMSS</option>
+        <option value="">-- Select Strand --</option>
+        <option value="ABM" <?= (old('strand')==='ABM')?'selected':'' ?>>ABM</option>
+        <option value="TVL-ICT" <?= (old('strand')==='TVL-ICT')?'selected':'' ?>>TVL-ICT</option>
+        <option value="TVL-HE" <?= (old('strand')==='TVL-HE')?'selected':'' ?>>TVL-HE</option>
+        <option value="STEM" <?= (old('strand')==='STEM')?'selected':'' ?>>STEM</option>
+        <option value="GAS" <?= (old('strand')==='GAS')?'selected':'' ?>>GAS</option>
+        <option value="HUMSS" <?= (old('strand')==='HUMSS')?'selected':'' ?>>HUMSS</option>
       </select>
 
       <input type="text" name="contact" placeholder="Contact Number" maxlength="11" pattern="[0-9]{10,11}" inputmode="numeric" oninput="this.value=this.value.replace(/[^0-9]/g,'')" value="<?= old('contact') ?>" required>
+
       <textarea name="address" placeholder="Address" rows="3" required><?= old('address') ?></textarea>
 
       <input type="text" name="username" placeholder="Username" value="<?= old('username') ?>" required>
 
-      <input type="text" name="lrn" placeholder="LRN" maxlength="12" inputmode="numeric" oninput="this.value=this.value.replace(/[^0-9]/g,'')" value="<?= old('lrn') ?>" required>
+      <input type="text" name="school_qr" placeholder="School QR / School ID Value (e.g. GMCBSH-117-24)" value="<?= old('school_qr') ?>" required>
+
+      <div class="lrn-note">
+        System LRN is auto-generated by the system after signup. Your school QR / ID value will be reviewed by admin before student access is granted.
+      </div>
       
       <div style="position:relative;">
-    <input type="password" id="password" name="password" placeholder="Password (min 6 chars)" required>
-    <span id="toggleText" onclick="togglePassword()" 
-      style="position:absolute; right:10px; top:12px; cursor:pointer; font-size:13px; color:#bb7310ff;">
-      Show
-    </span>
-</div>
+        <input type="password" id="password" name="password" placeholder="Password (min 6 chars)" required>
+        <span id="toggleText" onclick="togglePassword()" 
+          style="position:absolute; right:10px; top:12px; cursor:pointer; font-size:13px; color:#bb7310ff;">
+          Show
+        </span>
+      </div>
 
       <button class='sup' type="submit" name="signup">Sign Up</button>
       <div class="back">
-  <a href="login.php" class="log">Back</a>
-</div>
-
-   
+        <a href="login.php" class="log">Back</a>
+      </div>
     </form>
   </div>
 

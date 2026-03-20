@@ -9,8 +9,16 @@ if (!isset($_SESSION['student_role']) || $_SESSION['student_role'] !== 'admin') 
 }
 
 $id = (int)($_GET['id'] ?? 0);
+$page = (int)($_GET['page'] ?? 1);
+$search = trim($_GET['search'] ?? '');
+
+if ($page < 1) {
+    $page = 1;
+}
+
 if ($id <= 0) {
-    die("Invalid book ID");
+    header("Location: main_add_book.php?page=" . $page . "&search=" . urlencode($search) . "&type=error&msg=" . urlencode("Invalid book ID."));
+    exit;
 }
 
 // Fetch book
@@ -21,7 +29,8 @@ $res = mysqli_stmt_get_result($stmt);
 $book = mysqli_fetch_assoc($res);
 
 if (!$book) {
-    die("Book not found");
+    header("Location: main_add_book.php?page=" . $page . "&search=" . urlencode($search) . "&type=error&msg=" . urlencode("Book not found."));
+    exit;
 }
 
 $msg = "";
@@ -88,6 +97,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $destination = $uploadDir . $newFileName;
 
                     if (move_uploaded_file($fileTmp, $destination)) {
+                        if (!empty($book_cover) && file_exists($book_cover)) {
+                            @unlink($book_cover);
+                        }
                         $book_cover = $destination;
                     } else {
                         $msg = "Failed to upload new book cover.";
@@ -123,7 +135,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 );
 
                 if (mysqli_stmt_execute($update)) {
-                    header("Location: main_add_book.php?msg=" . urlencode("Book updated successfully!"));
+                    header("Location: main_add_book.php?page=" . $page . "&search=" . urlencode($search) . "&type=success&msg=" . urlencode("Book updated successfully!"));
                     exit;
                 } else {
                     $msg = "Error updating book: " . mysqli_error($conn);
@@ -132,6 +144,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
         }
     }
+
+    // Keep submitted values on the form if there is an error
+    $book['title'] = $title;
+    $book['author'] = $author;
+    $book['category'] = $category;
+    $book['publisher'] = $publisher;
+    $book['publication_year'] = $publication_year;
+    $book['isbn'] = $isbn;
+    $book['description'] = $description;
+    $book['shelf_location'] = $shelf_location;
+    $book['qr_code'] = $qr_code;
+    $book['book_cover'] = $book_cover;
 }
 ?>
 
@@ -367,7 +391,7 @@ function updateTotal() {
     </form>
 
     <div class="back">
-        <a href="main_add_book.php">← Back</a>
+        <a href="main_add_book.php?page=<?= $page ?>&search=<?= urlencode($search) ?>">← Back</a>
     </div>
 </div>
 

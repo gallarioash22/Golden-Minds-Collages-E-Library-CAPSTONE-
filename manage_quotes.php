@@ -71,13 +71,45 @@ if ($filter_status === 'approved') {
     $where = "WHERE q.moderation_result = 'filtered'";
 }
 
-// Fetch all posts
+// Pagination setup
+$records_per_page = 15;
+$page = isset($_GET['page']) ? (int)$_GET['page'] : 1;
+
+if ($page < 1) {
+    $page = 1;
+}
+
+// Count total posts using same filter
+$count_sql = "
+    SELECT COUNT(*) AS total
+    FROM tbl_quotes q
+    LEFT JOIN tbl_users u ON q.user_id = u.id
+    $where
+";
+$count_result = mysqli_query($conn, $count_sql);
+
+$total_records = 0;
+if ($count_result && mysqli_num_rows($count_result) > 0) {
+    $count_row = mysqli_fetch_assoc($count_result);
+    $total_records = (int)$count_row['total'];
+}
+
+$total_pages = max(1, ceil($total_records / $records_per_page));
+
+if ($page > $total_pages) {
+    $page = $total_pages;
+}
+
+$offset = ($page - 1) * $records_per_page;
+
+// Fetch posts with pagination
 $sql = "
     SELECT q.*, u.full_name
     FROM tbl_quotes q
     LEFT JOIN tbl_users u ON q.user_id = u.id
     $where
     ORDER BY q.post_date DESC
+    LIMIT $records_per_page OFFSET $offset
 ";
 
 $result = mysqli_query($conn, $sql);
@@ -221,6 +253,44 @@ $result = mysqli_query($conn, $sql);
     .back-link:hover {
       text-decoration: underline;
     }
+
+    .pagination {
+      margin-top: 20px;
+      text-align: center;
+    }
+
+    .pagination .btn,
+    .pagination .page-info {
+      display: inline-block;
+      margin: 0 5px;
+      padding: 8px 16px;
+      border-radius: 5px;
+      text-decoration: none;
+      font-weight: bold;
+    }
+
+    .pagination .btn {
+      background-color: #b5651d;
+      color: white;
+      transition: background-color 0.3s ease;
+    }
+
+    .pagination .btn:hover {
+      background-color: #8b4b2b;
+    }
+
+    .pagination .disabled {
+      background-color: #ccc;
+      color: white;
+      cursor: not-allowed;
+      pointer-events: none;
+    }
+
+    .pagination .page-info {
+      background: transparent;
+      color: #333;
+      padding: 8px 10px;
+    }
   </style>
 </head>
 <body>
@@ -358,11 +428,35 @@ $result = mysqli_query($conn, $sql);
             <?php endwhile; ?>
           <?php else: ?>
             <tr>
-              <td colspan="10">No posts found.</td>
+              <td colspan="10" style="text-align:center; padding:20px;">No posts found.</td>
             </tr>
           <?php endif; ?>
         </tbody>
       </table>
+    </div>
+
+    <div class="pagination">
+      <?php if ($total_pages > 1): ?>
+        <?php $query_base = 'status=' . urlencode($filter_status); ?>
+
+        <?php if ($page > 1): ?>
+          <a href="manage_quotes.php?<?= $query_base ?>&page=1" class="btn">First</a>
+          <a href="manage_quotes.php?<?= $query_base ?>&page=<?= $page - 1 ?>" class="btn">Previous</a>
+        <?php else: ?>
+          <span class="btn disabled">First</span>
+          <span class="btn disabled">Previous</span>
+        <?php endif; ?>
+
+        <span class="page-info">Page <?= $page ?> of <?= $total_pages ?></span>
+
+        <?php if ($page < $total_pages): ?>
+          <a href="manage_quotes.php?<?= $query_base ?>&page=<?= $page + 1 ?>" class="btn">Next</a>
+          <a href="manage_quotes.php?<?= $query_base ?>&page=<?= $total_pages ?>" class="btn">Last</a>
+        <?php else: ?>
+          <span class="btn disabled">Next</span>
+          <span class="btn disabled">Last</span>
+        <?php endif; ?>
+      <?php endif; ?>
     </div>
   </section>
 </div>

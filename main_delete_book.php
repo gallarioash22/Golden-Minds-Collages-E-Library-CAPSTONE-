@@ -9,9 +9,17 @@ if (!isset($_SESSION['student_role']) || $_SESSION['student_role'] !== 'admin') 
 }
 
 $id = (int)($_GET['id'] ?? 0);
+$page = (int)($_GET['page'] ?? 1);
+$search = trim($_GET['search'] ?? '');
+
+if ($page < 1) {
+    $page = 1;
+}
+
+$backUrl = "main_add_book.php?page=" . $page . "&search=" . urlencode($search);
 
 if ($id <= 0) {
-    header("Location: main_add_book.php?msg=" . urlencode("Invalid book ID."));
+    header("Location: " . $backUrl . "&type=error&msg=" . urlencode("Invalid book ID."));
     exit;
 }
 
@@ -23,7 +31,7 @@ $res = mysqli_stmt_get_result($stmt);
 $book = mysqli_fetch_assoc($res);
 
 if (!$book) {
-    header("Location: main_add_book.php?msg=" . urlencode("Book not found."));
+    header("Location: " . $backUrl . "&type=error&msg=" . urlencode("Book not found."));
     exit;
 }
 
@@ -35,7 +43,7 @@ $borrowedRes = mysqli_stmt_get_result($checkBorrowed);
 $borrowedRow = mysqli_fetch_assoc($borrowedRes);
 
 if ($borrowedRow && (int)$borrowedRow['borrowed'] > 0) {
-    header("Location: main_add_book.php?msg=" . urlencode("Cannot delete a book that still has borrowed copies."));
+    header("Location: " . $backUrl . "&type=error&msg=" . urlencode("Cannot delete a book that still has borrowed copies."));
     exit;
 }
 
@@ -47,10 +55,10 @@ if (mysqli_stmt_execute($delete)) {
         @unlink($book['book_cover']);
     }
 
-    header("Location: main_add_book.php?msg=" . urlencode("Book deleted successfully."));
+    header("Location: " . $backUrl . "&type=success&msg=" . urlencode("Book deleted successfully."));
     exit;
 } else {
-    header("Location: main_add_book.php?msg=" . urlencode("Error deleting book."));
+    header("Location: " . $backUrl . "&type=error&msg=" . urlencode("Error deleting book."));
     exit;
 }
 ?>

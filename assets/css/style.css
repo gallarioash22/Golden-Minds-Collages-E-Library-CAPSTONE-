@@ -191,22 +191,43 @@ img{ max-width:100%; height:auto; }
 }
 
 /* ===== PAGINATION ===== */
-.pagination{
-  text-align:center;
-  margin-top:10px;
+.pagination {
+    margin-top: 20px;
+    text-align: center;
 }
 
-.page-link{
-  display:inline-block;
-  margin:6px;
-  padding:8px 12px;
-  border-radius:6px;
-  background:var(--accent);
-  color:#000;
-  text-decoration:none;
+.pagination a,
+.pagination span.page-info {
+    display: inline-block;
+    margin: 0 5px;
+    padding: 8px 16px;
+    border-radius: 5px;
+    text-decoration: none;
+    font-weight: bold;
 }
 
-.page-link:hover{ opacity:0.85; }
+.pagination a {
+    background-color: #b5651d;
+    color: white;
+    transition: background-color 0.3s ease;
+}
+
+.pagination a:hover {
+    background-color: #8b4b2b;
+}
+
+.pagination .disabled {
+    background-color: #ccc;
+    color: white;
+    cursor: not-allowed;
+    pointer-events: none;
+}
+
+.pagination .page-info {
+    background: transparent;
+    color: #333;
+    padding: 8px 10px;
+}
 
 /* ===== RESPONSIVE ===== */
 @media (max-width: 900px){

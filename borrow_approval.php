@@ -19,7 +19,7 @@ if (!isset($_SESSION['student_id']) || $_SESSION['student_role'] !== 'librarian'
 |--------------------------------------------------------------------------
 | SMART SINGLE SCAN LOGIC (BACKUP)
 |--------------------------------------------------------------------------
-| Step 1: scan student QR / LRN
+| Step 1: scan student LRN OR school QR
 | Step 2: scan book QR / Book ID
 | Auto-detect:
 |   - approve pending request
@@ -28,11 +28,29 @@ if (!isset($_SESSION['student_id']) || $_SESSION['student_role'] !== 'librarian'
 $smart_message = "";
 $smart_message_type = "";
 $current_scan_lrn = $_SESSION['smart_scan_lrn'] ?? '';
+$matched_student = null;
 
 if (isset($_POST['reset_smart_scan'])) {
     unset($_SESSION['smart_scan_lrn']);
     header("Location: borrow_approval.php");
     exit;
+}
+
+// Load matched student details if session already has first scan
+if (!empty($_SESSION['smart_scan_lrn'])) {
+    $saved_student_code = mysqli_real_escape_string($conn, trim($_SESSION['smart_scan_lrn']));
+
+    $matched_student_query = mysqli_query($conn, "
+        SELECT id, username, full_name, lrn, school_qr
+        FROM tbl_users
+        WHERE lrn = '$saved_student_code'
+        OR school_qr = '$saved_student_code'
+        LIMIT 1
+    ");
+
+    if ($matched_student_query && mysqli_num_rows($matched_student_query) > 0) {
+        $matched_student = mysqli_fetch_assoc($matched_student_query);
+    }
 }
 
 if (isset($_POST['smart_scan_submit'])) {
@@ -42,54 +60,90 @@ if (isset($_POST['smart_scan_submit'])) {
         $smart_message = "Scan field is empty.";
         $smart_message_type = "error";
     } else {
-        // STEP 1: first scan = student LRN
+        // STEP 1: first scan = student LRN OR school QR
         if (empty($_SESSION['smart_scan_lrn'])) {
-            $safe_lrn = mysqli_real_escape_string($conn, $scan_value);
+            $safe_student_code = mysqli_real_escape_string($conn, $scan_value);
 
             $user_check = mysqli_query($conn, "
-                SELECT id, full_name, lrn
-                FROM tbl_users
-                WHERE lrn = '$safe_lrn'
-                LIMIT 1
-            ");
+            SELECT id, username, full_name, lrn, school_qr
+            FROM tbl_users
+            WHERE lrn = '$safe_student_code'
+            OR school_qr = '$safe_student_code'
+            LIMIT 1
+");
 
             if ($user_check && mysqli_num_rows($user_check) > 0) {
-                $_SESSION['smart_scan_lrn'] = $scan_value;
-                $current_scan_lrn = $scan_value;
-                $smart_message = "Student QR scanned successfully. Now scan the Book QR.";
-                $smart_message_type = "success";
+            $matched_student = mysqli_fetch_assoc($user_check);
+
+            $_SESSION['smart_scan_lrn'] = $scan_value;
+            $current_scan_lrn = $scan_value;
+
+            $smart_message = "Student code scanned successfully. Matched student: " . $matched_student['full_name'] . ". Now scan the Book ID or Book QR.";
+            $smart_message_type = "success";
             } else {
-                $smart_message = "Student not found using scanned LRN.";
+                $smart_message = "Student not found using scanned LRN or School QR.";
                 $smart_message_type = "error";
             }
         } else {
-            // STEP 2: second scan = book ID
-            $student_lrn = trim($_SESSION['smart_scan_lrn']);
-            $book_id = intval($scan_value);
+            // STEP 2: second scan = book ID OR qr_code
+            $student_scan_value = trim($_SESSION['smart_scan_lrn']);
+            $book_scan_value = trim($scan_value);
 
-            if ($book_id <= 0) {
-                $smart_message = "Invalid Book ID scanned.";
+            if ($book_scan_value === '') {
+                $smart_message = "Invalid Book ID or QR Code scanned.";
                 $smart_message_type = "error";
             } else {
-                $safe_lrn = mysqli_real_escape_string($conn, $student_lrn);
+                $safe_student_code = mysqli_real_escape_string($conn, $student_scan_value);
+                $safe_book_scan = mysqli_real_escape_string($conn, $book_scan_value);
 
                 mysqli_begin_transaction($conn);
 
                 try {
-                    // Find student first
+                    // Find student first using LRN OR school_qr
                     $user_query = mysqli_query($conn, "
-                        SELECT id, full_name, lrn
-                        FROM tbl_users
-                        WHERE lrn = '$safe_lrn'
-                        LIMIT 1
-                    ");
+                    SELECT id, username, full_name, lrn, school_qr
+                    FROM tbl_users
+                    WHERE lrn = '$safe_student_code'
+                    OR school_qr = '$safe_student_code'
+                    LIMIT 1
+");
 
                     if (!$user_query || mysqli_num_rows($user_query) <= 0) {
-                        throw new Exception("Student not found using scanned LRN.");
+                        throw new Exception("Student not found using scanned LRN or School QR.");
                     }
 
                     $user = mysqli_fetch_assoc($user_query);
                     $user_id = intval($user['id']);
+
+                    // ------------------------------------------------------
+                    // FIND BOOK USING scanned ID OR qr_code
+                    // ------------------------------------------------------
+                    if (is_numeric($book_scan_value)) {
+                        $book_id_numeric = intval($book_scan_value);
+
+                        $book_lookup = mysqli_query($conn, "
+                            SELECT id, title, quantity, borrowed, qr_code
+                            FROM tbl_books
+                            WHERE id = '$book_id_numeric'
+                               OR qr_code = '$safe_book_scan'
+                            LIMIT 1
+                        ");
+                    } else {
+                        $book_lookup = mysqli_query($conn, "
+                            SELECT id, title, quantity, borrowed, qr_code
+                            FROM tbl_books
+                            WHERE qr_code = '$safe_book_scan'
+                            LIMIT 1
+                        ");
+                    }
+
+                    if (!$book_lookup || mysqli_num_rows($book_lookup) <= 0) {
+                        throw new Exception("Book not found using scanned Book ID or QR Code.");
+                    }
+
+                    $book = mysqli_fetch_assoc($book_lookup);
+                    $book_id = intval($book['id']);
+                    $book_title = $book['title'];
 
                     // ------------------------------------------------------
                     // 1) CHECK PENDING BORROW FIRST
@@ -99,8 +153,8 @@ if (isset($_POST['smart_scan_submit'])) {
                         FROM tbl_borrowed_records br
                         JOIN tbl_books b ON br.book_id = b.id
                         WHERE br.user_id = '$user_id'
-                          AND br.book_id = '$book_id'
-                          AND br.status = 'pending'
+                        AND br.book_id = '$book_id'
+                        AND br.status = 'pending'
                         ORDER BY br.id ASC
                         LIMIT 1
                     ");
@@ -121,8 +175,8 @@ if (isset($_POST['smart_scan_submit'])) {
                             throw new Exception("Book not found.");
                         }
 
-                        $book = mysqli_fetch_assoc($book_query);
-                        $available = intval($book['quantity']);
+                        $book_stock = mysqli_fetch_assoc($book_query);
+                        $available = intval($book_stock['quantity']);
 
                         if ($available <= 0) {
                             throw new Exception("No available copies left for this book.");
@@ -130,13 +184,16 @@ if (isset($_POST['smart_scan_submit'])) {
 
                         $approved_by = isset($_SESSION['student_id']) ? intval($_SESSION['student_id']) : "NULL";
 
-                        $update_record = mysqli_query($conn, "
-                            UPDATE tbl_borrowed_records
-                            SET status = 'borrowed',
-                                approved_at = NOW(),
-                                approved_by = " . ($approved_by !== "NULL" ? $approved_by : "NULL") . "
-                            WHERE id = '$record_id'
-                        ");
+                        $borrow_days = 7;
+
+                            $update_record = mysqli_query($conn, "
+                                UPDATE tbl_borrowed_records
+                                SET status = 'borrowed',
+                                    approved_at = NOW(),
+                                    due_date = DATE_ADD(NOW(), INTERVAL $borrow_days DAY),
+                                    approved_by = " . ($approved_by !== "NULL" ? $approved_by : "NULL") . "
+                                WHERE id = '$record_id'
+                            ");
 
                         if (!$update_record) {
                             throw new Exception("Failed to update borrow record.");
@@ -158,7 +215,7 @@ if (isset($_POST['smart_scan_submit'])) {
                         unset($_SESSION['smart_scan_lrn']);
                         $current_scan_lrn = "";
 
-                        echo "<script>alert('Borrow approved successfully via Smart Scan.'); window.location='borrow_approval.php';</script>";
+                        echo "<script>alert('Borrow approved successfully via Smart Scan. Book: " . addslashes($book_title) . "'); window.location='borrow_approval.php';</script>";
                         exit;
                     }
 
@@ -170,9 +227,9 @@ if (isset($_POST['smart_scan_submit'])) {
                         FROM tbl_borrowed_records br
                         JOIN tbl_books b ON br.book_id = b.id
                         WHERE br.user_id = '$user_id'
-                          AND br.book_id = '$book_id'
-                          AND br.status = 'borrowed'
-                          AND (br.return_date IS NULL OR br.return_date = '0000-00-00 00:00:00')
+                        AND br.book_id = '$book_id'
+                        AND br.status = 'borrowed'
+                        AND (br.return_date IS NULL OR br.return_date = '0000-00-00 00:00:00')
                         ORDER BY br.id DESC
                         LIMIT 1
                     ");
@@ -208,7 +265,7 @@ if (isset($_POST['smart_scan_submit'])) {
                         unset($_SESSION['smart_scan_lrn']);
                         $current_scan_lrn = "";
 
-                        echo "<script>alert('Book returned successfully via Smart Scan.'); window.location='borrow_approval.php';</script>";
+                        echo "<script>alert('Book returned successfully via Smart Scan. Book: " . addslashes($book_title) . "'); window.location='borrow_approval.php';</script>";
                         exit;
                     }
 
@@ -257,13 +314,16 @@ if (isset($_POST['action']) && isset($_POST['borrow_id'])) {
                 if ($available > 0) {
                     $approved_by = isset($_SESSION['student_id']) ? intval($_SESSION['student_id']) : "NULL";
 
-                    mysqli_query($conn, "
-                        UPDATE tbl_borrowed_records
-                        SET status = 'borrowed',
-                            approved_at = NOW(),
-                            approved_by = " . ($approved_by !== "NULL" ? $approved_by : "NULL") . "
-                        WHERE id = $borrow_id
-                    ");
+                    $borrow_days = 7;
+
+                        mysqli_query($conn, "
+                            UPDATE tbl_borrowed_records
+                            SET status = 'borrowed',
+                                approved_at = NOW(),
+                                due_date = DATE_ADD(NOW(), INTERVAL $borrow_days DAY),
+                                approved_by = " . ($approved_by !== "NULL" ? $approved_by : "NULL") . "
+                            WHERE id = $borrow_id
+                        ");
 
                     mysqli_query($conn, "
                         UPDATE tbl_books
@@ -294,33 +354,77 @@ if (isset($_POST['action']) && isset($_POST['borrow_id'])) {
     exit;
 }
 
-// Pagination Setup
-$records_per_page = 20;
+// -----------------------------
+// SEARCH + STATUS FILTER + PAGINATION
+// -----------------------------
+$records_per_page = 10;
 $page = isset($_GET['page']) ? (int)$_GET['page'] : 1;
 if ($page < 1) {
     $page = 1;
 }
-$offset = ($page - 1) * $records_per_page;
 
-// Fetch all requests for display
-$pending_res = mysqli_query($conn, "
-    SELECT r.id, r.book_id, u.username, u.full_name, u.lrn, b.title, b.author, r.borrow_date, r.return_date, r.status
+$search = trim($_GET['search'] ?? '');
+$safe_search = mysqli_real_escape_string($conn, $search);
+
+$allowed_filters = ['all', 'pending', 'borrowed', 'returned', 'rejected'];
+$status_filter = strtolower(trim($_GET['status'] ?? 'all'));
+if (!in_array($status_filter, $allowed_filters, true)) {
+    $status_filter = 'all';
+}
+
+$where_conditions = [];
+$where_conditions[] = "r.status IN ('pending', 'borrowed', 'rejected', 'returned')";
+
+if ($status_filter !== 'all') {
+    $where_conditions[] = "r.status = '" . mysqli_real_escape_string($conn, $status_filter) . "'";
+}
+
+if ($search !== '') {
+    $where_conditions[] = "(
+        u.full_name LIKE '%$safe_search%' OR
+        u.username LIKE '%$safe_search%' OR
+        u.lrn LIKE '%$safe_search%' OR
+        u.school_qr LIKE '%$safe_search%' OR
+        b.title LIKE '%$safe_search%'
+    )";
+}
+
+$where_sql = "WHERE " . implode(" AND ", $where_conditions);
+
+// Count total requests using SAME joins + SAME filters
+$total_requests_res = mysqli_query($conn, "
+    SELECT COUNT(*) AS total
     FROM tbl_borrowed_records r
     JOIN tbl_books b ON b.id = r.book_id
     JOIN tbl_users u ON u.id = r.user_id
-    WHERE r.status IN ('pending', 'borrowed', 'rejected', 'returned')
-    ORDER BY r.borrow_date DESC
-    LIMIT $records_per_page OFFSET $offset
+    $where_sql
 ");
 
-// Get total requests
-$total_requests_res = mysqli_query($conn, "
-    SELECT COUNT(*) AS total
-    FROM tbl_borrowed_records
-    WHERE status IN ('pending', 'borrowed', 'rejected', 'returned')
+$total_requests = 0;
+if ($total_requests_res && mysqli_num_rows($total_requests_res) > 0) {
+    $total_row = mysqli_fetch_assoc($total_requests_res);
+    $total_requests = (int)$total_row['total'];
+}
+
+$total_pages = max(1, ceil($total_requests / $records_per_page));
+
+if ($page > $total_pages) {
+    $page = $total_pages;
+}
+
+$offset = ($page - 1) * $records_per_page;
+
+// Fetch filtered requests
+$pending_res = mysqli_query($conn, "
+    SELECT r.id, r.book_id, u.username, u.full_name, u.lrn, u.school_qr, b.title, b.author,
+           r.borrow_date, r.due_date, r.return_date, r.status
+    FROM tbl_borrowed_records r
+    JOIN tbl_books b ON b.id = r.book_id
+    JOIN tbl_users u ON u.id = r.user_id
+    $where_sql
+    ORDER BY r.borrow_date DESC, r.id DESC
+    LIMIT $records_per_page OFFSET $offset
 ");
-$total_requests = mysqli_fetch_assoc($total_requests_res)['total'];
-$total_pages = ceil($total_requests / $records_per_page);
 ?>
 
 <!doctype html>
@@ -592,6 +696,34 @@ $total_pages = ceil($total_requests / $records_per_page);
                 white-space: nowrap;
             }
         }
+
+        .student-preview-box {
+    background: #f8fff1;
+    border: 1px solid #cfe8b4;
+    border-radius: 10px;
+    padding: 14px;
+    margin-bottom: 12px;
+    }
+
+    .student-preview-title {
+    margin: 0 0 10px 0;
+    color: #2f6b1f;
+    font-size: 16px;
+    }
+
+    .student-preview-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(220px, 1fr));
+    gap: 8px 14px;
+    font-size: 14px;
+    color: #333;
+    }
+
+@media (max-width: 768px) {
+    .student-preview-grid {
+        grid-template-columns: 1fr;
+    }
+}
     </style>
 </head>
 <body>
@@ -605,16 +737,28 @@ $total_pages = ceil($total_requests / $records_per_page);
             <h2>Borrow Requests</h2>
 
             <div class="smart-scan-box">
-                <h3 class="smart-scan-title">Smart Single Scanner (Backup)</h3>
+                <h3 class="smart-scan-title">Smart Single Scanner</h3>
 
                 <div class="smart-status">
-                    <strong>Current Student Scan:</strong>
-                    <?php if (!empty($current_scan_lrn)): ?>
-                        <span class="smart-ready"><?= htmlspecialchars($current_scan_lrn) ?></span>
-                    <?php else: ?>
-                        <span class="smart-waiting">Waiting for Student QR...</span>
-                    <?php endif; ?>
-                </div>
+    <strong>Current Student Scan:</strong>
+    <?php if (!empty($current_scan_lrn)): ?>
+        <span class="smart-ready"><?= htmlspecialchars($current_scan_lrn) ?></span>
+    <?php else: ?>
+        <span class="smart-waiting">Waiting for Student QR...</span>
+    <?php endif; ?>
+</div>
+
+<?php if (!empty($matched_student)): ?>
+    <div class="student-preview-box">
+        <h4 class="student-preview-title">Matched Student Details</h4>
+        <div class="student-preview-grid">
+            <div><strong>Full Name:</strong> <?= htmlspecialchars($matched_student['full_name'] ?? '') ?></div>
+            <div><strong>Username:</strong> <?= htmlspecialchars($matched_student['username'] ?? '') ?></div>
+            <div><strong>LRN:</strong> <?= htmlspecialchars($matched_student['lrn'] ?? '') ?></div>
+            <div><strong>School QR:</strong> <?= htmlspecialchars($matched_student['school_qr'] ?? '') ?></div>
+        </div>
+    </div>
+<?php endif; ?>
 
                 <?php if (!empty($smart_message)): ?>
                     <div class="smart-message <?= htmlspecialchars($smart_message_type) ?>">
@@ -628,7 +772,7 @@ $total_pages = ceil($total_requests / $records_per_page);
                             type="text"
                             name="smart_scan_value"
                             id="smart_scan_value"
-                            placeholder="<?= empty($current_scan_lrn) ? 'Scan Student QR / Enter LRN' : 'Scan Book QR / Enter Book ID' ?>"
+                            placeholder="<?= empty($current_scan_lrn) ? 'Scan Student LRN or School QR' : 'Scan Book QR / Enter Book ID' ?>"
                             autocomplete="off"
                             autofocus
                             required
@@ -636,7 +780,7 @@ $total_pages = ceil($total_requests / $records_per_page);
                         <button type="submit" name="smart_scan_submit" id="smart_scan_submit_btn" class="btn">Scan</button>
                     </div>
                     <div class="scan-note">
-                        Scan Student QR first, then scan Book QR. The system will auto-approve pending borrow or auto-return active borrowed books.
+                        Scan Student LRN or School QR first, then scan Book QR or enter Book ID. The system will auto-approve pending borrow or auto-return active borrowed books.
                     </div>
                 </form>
 
@@ -644,6 +788,30 @@ $total_pages = ceil($total_requests / $records_per_page);
                     <button type="submit" name="reset_smart_scan" class="btn reset-btn">Reset Scan</button>
                 </form>
             </div>
+
+            <div style="background:#fff8e7; border:1px solid #f2d7a6; border-radius:10px; padding:15px; margin-bottom:20px;">
+    <form method="GET" action="borrow_approval.php" style="display:flex; gap:10px; flex-wrap:wrap; align-items:center;">
+        <input
+            type="text"
+            name="search"
+            value="<?= htmlspecialchars($search) ?>"
+            placeholder="Search student name, username, LRN, school QR, or book title"
+            style="flex:1; min-width:260px; padding:10px; border:1px solid #ccc; border-radius:5px;"
+        >
+
+        <select name="status" style="padding:10px; border:1px solid #ccc; border-radius:5px;">
+            <option value="all" <?= $status_filter === 'all' ? 'selected' : '' ?>>All</option>
+            <option value="pending" <?= $status_filter === 'pending' ? 'selected' : '' ?>>Pending</option>
+            <option value="borrowed" <?= $status_filter === 'borrowed' ? 'selected' : '' ?>>Borrowed</option>
+            <option value="returned" <?= $status_filter === 'returned' ? 'selected' : '' ?>>Returned</option>
+            <option value="rejected" <?= $status_filter === 'rejected' ? 'selected' : '' ?>>Rejected</option>
+        </select>
+
+        <button type="submit" class="btn">Search</button>
+
+        <a href="borrow_approval.php" class="btn" style="background:#6c757d;">Reset</a>
+    </form>
+</div>
 
             <table>
                 <thead>
@@ -655,6 +823,7 @@ $total_pages = ceil($total_requests / $records_per_page);
                         <th>Book ID</th>
                         <th>Author</th>
                         <th>Borrow Date</th>
+                        <th>Due Date</th>
                         <th>Status</th>
                         <th>Actions</th>
                     </tr>
@@ -669,12 +838,39 @@ $total_pages = ceil($total_requests / $records_per_page);
                             <td><?= htmlspecialchars($request['title']) ?></td>
                             <td><?= htmlspecialchars($request['book_id']) ?></td>
                             <td><?= htmlspecialchars($request['author']) ?></td>
-                            <td><?= date('M d, Y', strtotime($request['borrow_date'])) ?></td>
+                            <td>
+                            <?= !empty($request['borrow_date']) ? date('M d, Y', strtotime($request['borrow_date'])) : '-' ?>
+                            </td>
+                            <td>
+                                <?php 
+                                if (!empty($request['due_date'])) {
+                                    echo date('M d, Y', strtotime($request['due_date']));
+                                } else {
+                                    echo "-";
+                                }
+                                ?>
+                                </td>
                             <td>
                                 <?php if ($request['status'] === 'pending'): ?>
                                     <span class="badge badge-pending">Pending</span>
                                 <?php elseif ($request['status'] === 'borrowed'): ?>
+                                    <?php
+                                $isOverdue = false;
+                                                                
+                                if (!empty($request['due_date'])) {
+                                    $due = strtotime($request['due_date']);
+                                    $today = time();
+                                                                
+                                    if ($today > $due && !$request['return_date']) {
+                                        $isOverdue = true;
+                                    }
+                                }
+                                    ?>
+                                <?php if ($isOverdue): ?>
+                                    <span class="badge" style="background:#ff4d4d;color:white;">OVERDUE</span>
+                                <?php else: ?>
                                     <span class="badge badge-borrowed">Borrowed</span>
+                                <?php endif; ?>
                                 <?php elseif ($request['status'] === 'rejected'): ?>
                                     <span class="badge badge-rejected">Rejected</span>
                                 <?php elseif ($request['status'] === 'returned'): ?>
@@ -704,64 +900,62 @@ $total_pages = ceil($total_requests / $records_per_page);
                         <?php endwhile; ?>
                     <?php else: ?>
                         <tr>
-                            <td colspan="9" style="text-align:center;">No borrow requests found.</td>
+                            <td colspan="10" style="text-align:center;">No borrow requests found.</td>
                         </tr>
                     <?php endif; ?>
-                </tbody>
+                </tbody> 
             </table>
 
             <div class="pagination">
-                <?php if ($total_pages > 1): ?>
-                    <?php if ($page > 1): ?>
-                        <a href="borrow_approval.php?page=1">First</a>
-                        <a href="borrow_approval.php?page=<?= $page - 1 ?>">Previous</a>
-                    <?php else: ?>
-                        <a class="disabled">First</a>
-                        <a class="disabled">Previous</a>
-                    <?php endif; ?>
+    <?php if ($total_pages > 1): ?>
+        <?php
+        $query_base = 'search=' . urlencode($search) . '&status=' . urlencode($status_filter);
+        ?>
 
-                    <span style="margin: 0 10px; font-weight: bold;">
-                        Page <?= $page ?> of <?= $total_pages ?>
-                    </span>
+        <?php if ($page > 1): ?>
+            <a href="borrow_approval.php?<?= $query_base ?>&page=1">First</a>
+            <a href="borrow_approval.php?<?= $query_base ?>&page=<?= $page - 1 ?>">Previous</a>
+        <?php else: ?>
+            <a class="disabled">First</a>
+            <a class="disabled">Previous</a>
+        <?php endif; ?>
 
-                    <?php if ($page < $total_pages): ?>
-                        <a href="borrow_approval.php?page=<?= $page + 1 ?>">Next</a>
-                        <a href="borrow_approval.php?page=<?= $total_pages ?>">Last</a>
-                    <?php else: ?>
-                        <a class="disabled">Next</a>
-                        <a class="disabled">Last</a>
-                    <?php endif; ?>
-                <?php endif; ?>
-            </div>
+        <span style="margin: 0 10px; font-weight: bold;">
+            Page <?= $page ?> of <?= $total_pages ?>
+        </span>
+
+        <?php if ($page < $total_pages): ?>
+            <a href="borrow_approval.php?<?= $query_base ?>&page=<?= $page + 1 ?>">Next</a>
+            <a href="borrow_approval.php?<?= $query_base ?>&page=<?= $total_pages ?>">Last</a>
+        <?php else: ?>
+            <a class="disabled">Next</a>
+            <a class="disabled">Last</a>
+        <?php endif; ?>
+    <?php endif; ?>
+</div>
         </div>
     </div>
 
     <script>
-    document.addEventListener("DOMContentLoaded", function () {
-        const smartInput = document.getElementById("smart_scan_value");
-        const smartForm = document.getElementById("smart-scan-form");
-        const smartBtn = document.getElementById("smart_scan_submit_btn");
+document.addEventListener("DOMContentLoaded", function () {
+    const smartInput = document.getElementById("smart_scan_value");
+    const smartForm = document.getElementById("smart-scan-form");
+    const smartBtn = document.getElementById("smart_scan_submit_btn");
 
-        if (smartInput) {
-            smartInput.focus();
+    if (smartInput) {
+        smartInput.focus();
 
-            smartInput.addEventListener("keydown", function (e) {
-                if (e.key === "Enter") {
-                    e.preventDefault();
+        smartInput.addEventListener("keydown", function (e) {
+            if (e.key === "Enter") {
+                e.preventDefault();
 
-                    if (smartInput.value.trim() !== "") {
-                        smartForm.requestSubmit(smartBtn);
-                    }
+                if (smartInput.value.trim() !== "") {
+                    smartForm.requestSubmit(smartBtn);
                 }
-            });
-        }
-
-        document.addEventListener("click", function () {
-            if (smartInput) {
-                smartInput.focus();
             }
         });
-    });
-    </script>
+    }
+});
+</script>
 </body>
 </html>

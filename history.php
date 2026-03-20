@@ -17,44 +17,60 @@ $user_id = (int)$_SESSION['student_id'];
 // --- Status Tabs Setup (Shopee-like) ---
 $allowed_statuses = ['pending', 'borrowed', 'returned', 'rejected'];
 $status = isset($_GET['status']) ? strtolower(trim($_GET['status'])) : 'pending';
-if (!in_array($status, $allowed_statuses, true)) $status = 'pending';
+if (!in_array($status, $allowed_statuses, true)) {
+    $status = 'pending';
+}
 
 // Pagination Setup (per status)
 $history_per_page = 10;
 $page = isset($_GET['page']) ? max(1, (int)$_GET['page']) : 1;
-$offset = ($page - 1) * $history_per_page;
 
-// Count totals for each status (for badge numbers)
+// Count totals for each status (ONLY records with existing books)
 $counts = [];
 $count_sql = "
     SELECT LOWER(r.status) AS st, COUNT(*) AS total
     FROM tbl_borrowed_records r
+    JOIN tbl_books b ON b.id = r.book_id
     WHERE r.user_id = $user_id
     GROUP BY LOWER(r.status)
 ";
 $count_res = mysqli_query($conn, $count_sql);
-while ($row = mysqli_fetch_assoc($count_res)) {
-    $counts[$row['st']] = (int)$row['total'];
-}
-foreach ($allowed_statuses as $st) {
-    if (!isset($counts[$st])) $counts[$st] = 0;
+
+if ($count_res) {
+    while ($row = mysqli_fetch_assoc($count_res)) {
+        $counts[$row['st']] = (int)$row['total'];
+    }
 }
 
+foreach ($allowed_statuses as $st) {
+    if (!isset($counts[$st])) {
+        $counts[$st] = 0;
+    }
+}
+
+// Total pages for selected status
+$total_history = $counts[$status];
+$total_pages = max(1, (int)ceil($total_history / $history_per_page));
+
+// If current page is too high after records/books were deleted, fix it
+if ($page > $total_pages) {
+    $page = $total_pages;
+}
+
+$offset = ($page - 1) * $history_per_page;
+
 // Fetch borrow history filtered by selected status
+$escaped_status = mysqli_real_escape_string($conn, $status);
 $history_sql = "
     SELECT b.title, b.author, r.borrow_date, r.return_date, r.status
     FROM tbl_borrowed_records r
     JOIN tbl_books b ON b.id = r.book_id
     WHERE r.user_id = $user_id
-      AND LOWER(r.status) = '".mysqli_real_escape_string($conn, $status)."'
+      AND LOWER(r.status) = '$escaped_status'
     ORDER BY r.borrow_date DESC
     LIMIT $history_per_page OFFSET $offset
 ";
-$history_res = mysqli_query($conn, $history_sql);
-
-// Total pages for selected status
-$total_history = $counts[$status];
-$total_pages = max(1, (int)ceil($total_history / $history_per_page));
+$history_res = mysqli_query($conn, $history_sql);       
 
 // Helper: status label
 function status_label($st) {

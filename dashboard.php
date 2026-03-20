@@ -107,10 +107,34 @@ if (isset($_GET['action']) && isset($_GET['quote_id'])) {
     }
 }
 
-// Pagination for quotes feed (limit 10 per page)
+// Pagination for quotes feed
 $limit = 10;
 $page = isset($_GET['page']) ? (int)$_GET['page'] : 1;
+
+if ($page < 1) {
+    $page = 1;
+}
+
+$quotes_count_res = mysqli_query($conn, "
+    SELECT COUNT(*) AS total_quotes 
+    FROM tbl_quotes
+    WHERE status = 'approved'
+");
+
+$total_quotes = 0;
+if ($quotes_count_res && mysqli_num_rows($quotes_count_res) > 0) {
+    $count_row = mysqli_fetch_assoc($quotes_count_res);
+    $total_quotes = (int)$count_row['total_quotes'];
+}
+
+$total_pages = max(1, ceil($total_quotes / $limit));
+
+if ($page > $total_pages) {
+    $page = $total_pages;
+}
+
 $offset = ($page - 1) * $limit;
+
 $quotes_res = mysqli_query($conn, "
     SELECT q.id, q.quote, q.post_date, q.likes, u.full_name 
     FROM tbl_quotes q 
@@ -119,14 +143,6 @@ $quotes_res = mysqli_query($conn, "
     ORDER BY q.post_date DESC
     LIMIT $limit OFFSET $offset
 ");
-
-$quotes_count_res = mysqli_query($conn, "
-    SELECT COUNT(*) AS total_quotes 
-    FROM tbl_quotes
-    WHERE status = 'approved'
-");
-$total_quotes = mysqli_fetch_assoc($quotes_count_res)['total_quotes'];
-$total_pages = ceil($total_quotes / $limit);
 
 // Fetch borrowed records
 $borrowed_res = mysqli_query($conn, "
@@ -147,6 +163,46 @@ $borrowed_res = mysqli_query($conn, "
 
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <link rel="stylesheet" href="assets/css/style.css">
+
+  <style>
+    .pagination {
+    margin-top: 20px;
+    text-align: center;
+}
+
+.pagination a,
+.pagination span.page-info {
+    display: inline-block;
+    margin: 0 5px;
+    padding: 8px 16px;
+    border-radius: 5px;
+    text-decoration: none;
+    font-weight: bold;
+}
+
+.pagination a {
+    background-color: #b5651d;
+    color: white;
+    transition: background-color 0.3s ease;
+}
+
+.pagination a:hover {
+    background-color: #8b4b2b;
+}
+
+.pagination .disabled {
+    background-color: #ccc;
+    color: white;
+    cursor: not-allowed;
+    pointer-events: none;
+}
+
+.pagination .page-info {
+    background: transparent;
+    color: #333;
+    padding: 8px 10px;
+}
+  </style>
 </head>
 <body>
 
@@ -187,11 +243,13 @@ $borrowed_res = mysqli_query($conn, "
 
     <?php if ($user_role === 'admin'): ?>
       <li><a href="main_add_book.php">Add Book</a></li>
+      <li><a href="admin_statistics.php">Dashboard Statistics</a></li>
       <li><a href="manage_roles.php">User Management</a></li>
       <li><a href="quotes_feedback.php">View Quotes & Feedback</a></li>
       <li><a href="manage_quotes.php">Manage Quotes & Feedback</a></li>
     <?php elseif ($user_role === 'librarian'): ?>
       <li><a href="borrow_approval.php">Borrow Approval</a></li>
+      <li><a href="admin_statistics.php">Dashboard Statistics</a></li>
       <li><a href="manage_roles.php">User Management</a></li>
       <li><a href="quotes_feedback.php">View Quotes & Feedback</a></li>
       <li><a href="manage_quotes.php">Manage Quotes & Feedback</a></li>
@@ -224,13 +282,29 @@ $borrowed_res = mysqli_query($conn, "
   <?php endwhile; ?>
 </div>
 
+    <div class="pagination">
     <?php if ($total_pages > 1): ?>
-      <div class="pagination">
-        <?php for ($i = 1; $i <= $total_pages; $i++): ?>
-          <a href="dashboard.php?page=<?= $i ?>" class="page-link"><?= $i ?></a>
-        <?php endfor; ?>
-      </div>
+
+        <?php if ($page > 1): ?>
+            <a href="dashboard.php?page=1">First</a>
+            <a href="dashboard.php?page=<?= $page - 1 ?>">Previous</a>
+        <?php else: ?>
+            <a class="disabled">First</a>
+            <a class="disabled">Previous</a>
+        <?php endif; ?>
+
+        <span class="page-info">Page <?= $page ?> of <?= $total_pages ?></span>
+
+        <?php if ($page < $total_pages): ?>
+            <a href="dashboard.php?page=<?= $page + 1 ?>">Next</a>
+            <a href="dashboard.php?page=<?= $total_pages ?>">Last</a>
+        <?php else: ?>
+            <a class="disabled">Next</a>
+            <a class="disabled">Last</a>
+        <?php endif; ?>
+
     <?php endif; ?>
+</div>
   </section>
 </div>
 
